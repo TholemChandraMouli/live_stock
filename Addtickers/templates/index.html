@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Stock Market Insights</title>
+    <!-- Link to external CSS file -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js CDN for graphing -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<!-- Dividend Yield Calculator Button -->
+<a href="https://tholem.pythonanywhere.com/" target="_blank" class="calculator-button">Dividend Yield Calculator</a>
+
+    <div class="theme-toggle">
+  <label class="switch">
+    <input type="checkbox" id="toggleTheme">
+    <span class="slider"></span>
+  </label>
+  <span>Dark Mode</span>
+</div>
+
+    <div class="container">
+        <h1 class="main-title">Live Stock Market Insights</h1>
+
+        <!-- Current Time Display -->
+        <div class="current-time-display">
+            Dashboard Last Updated: <span id="current-dashboard-time"></span>
+        </div>
+
+        <!-- Loading and Error Messages -->
+        <div id="loadingIndicator" class="loading-indicator">
+            Loading data...
+        </div>
+        <div id="errorMessage" class="error-message">
+            An error occurred. Please try again.
+        </div>
+
+        <!-- Stock Cards Grid (Existing Feature) -->
+        <div class="stock-cards-grid">
+            {% for stock in stocks %}
+            <div class="stock-card">
+                <h3 class="stock-symbol">{{ stock.symbol }}</h3>
+                <p class="last-updated">Last Updated: {{ stock.timestamp | default('N/A') }}</p>
+                <p class="stock-detail">Open: ${{ stock.open | default('N/A') }}</p>
+                <p class="stock-detail">Close: ${{ stock.close | default('N/A') }}</p>
+                <p class="stock-detail">High: ${{ stock.high | default('N/A') }}</p>
+                <p class="stock-detail">Low: ${{ stock.low | default('N/A') }}</p>
+                
+                <p class="stock-change {% if stock.change is not none and stock.change >= 0 %}positive-change{% elif stock.change is not none and stock.change < 0 %}negative-change{% endif %}">
+                    Change: {{ stock.change | default('N/A') }} ({{ stock.percent_change | default('N/A') }}%)
+                </p>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- NEW: Compare Stocks Section -->
+        <div class="section-card compare-section">
+            <h2 class="section-title">Compare Stock Investments</h2>
+            <div class="input-group compare-inputs">
+                <input type="text" id="compareSymbols" placeholder="Symbols (e.g., AAPL, MSFT, GOOGL)">
+                <input type="number" id="compareInvestment" value="10000" min="1" step="any" placeholder="Starting Investment ($)">
+                <input type="number" id="compareYears" value="10" min="1" placeholder="Investment Years">
+                <button id="compareBtn" class="btn">Compare</button>
+            </div>
+            <div id="compareError" class="error-message" style="display: none;"></div>
+
+            <div id="compareResults" style="display: none;">
+                <h3 class="subsection-title">Comparison Table</h3>
+                <div class="table-container">
+                    <table id="comparisonTable">
+                        <thead>
+                            <tr>
+                                <th>Metric</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Table rows will be populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3 class="subsection-title">Investment Growth Chart</h3>
+                <div class="chart-container">
+                    <canvas id="comparisonChart"></canvas>
+                    <div id="chartCompareMessage" class="info-text chart-message"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Helper functions (already existing and robust)
+        function formatNumber(value) {
+            return (typeof value === 'number' && !isNaN(value)) ? value.toFixed(2) : 'N/A';
+        }
+
+        
+
+        // --- Compare Stocks Feature Logic ---
+        const compareSymbolsInput = document.getElementById('compareSymbols');
+        const compareInvestmentInput = document.getElementById('compareInvestment');
+        const compareYearsInput = document.getElementById('compareYears');
+        const compareBtn = document.getElementById('compareBtn');
+        const compareErrorDiv = document.getElementById('compareError');
+        const compareResultsDiv = document.getElementById('compareResults');
+        const comparisonTable = document.getElementById('comparisonTable');
+        const comparisonChartCanvas = document.getElementById('comparisonChart');
+        const chartCompareMessage = document.getElementById('chartCompareMessage');
+        const currentDashboardTimeSpan = document.getElementById('current-dashboard-time'); // Get the span element
+
+        let comparisonChartInstance; // To hold the Chart.js instance for comparison
+
+        const COLORS = [
+            'rgb(79, 70, 229)',    // Indigo 600
+            'rgb(34, 197, 94)',    // Green 500
+            'rgb(234, 179, 8)',    // Yellow 500
+            'rgb(239, 68, 68)',    // Red 500
+            'rgb(99, 102, 241)',   // Indigo 400
+            'rgb(6, 182, 212)',    // Cyan 500
+            'rgb(249, 115, 22)',   // Orange 500
+            'rgb(168, 85, 247)',   // Purple 500
+            'rgb(236, 72, 153)',   // Pink 500
+            'rgb(148, 163, 184)'   // Slate 400
+        ];
+
+        compareBtn.addEventListener('click', async () => {
+            const symbols = compareSymbolsInput.value.split(',').map(s => s.trim().toUpperCase()).filter(s => s);
+            const investment = parseFloat(compareInvestmentInput.value);
+            const years = parseInt(compareYearsInput.value);
+
+            // Basic validation
+            if (symbols.length === 0) {
+                displayCompareError('Please enter at least one stock symbol.');
+                return;
+            }
+            if (isNaN(investment) || investment <= 0) {
+                displayCompareError('Please enter a valid starting investment (must be positive).');
+                return;
+            }
+            if (isNaN(years) || years <= 0) {
+                displayCompareError('Please enter a valid number of investment years (must be positive).');
+                return;
+            }
+
+            displayCompareError(''); // Clear previous errors
+            compareResultsDiv.style.display = 'none'; // Hide results while loading
+            chartCompareMessage.style.display = 'block';
+            chartCompareMessage.textContent = 'Calculating investment comparison... This may take a moment.';
+
+            // Show loading indicator (re-use main one or create a new one)
+            document.getElementById('loadingIndicator').style.display = 'block';
+
+            try {
+                const response = await fetch(`/api/calculate_comparison?symbols=${symbols.join(',')}&investment=${investment}&years=${years}`);
+                const result = await response.json();
+
+                if (result.error) {
+                    displayCompareError(result.error);
+                    return;
+                }
+
+                renderComparisonTable(result.comparison_table);
+                renderComparisonChart(result.comparison_chart_data, years);
+                
+                compareResultsDiv.style.display = 'block'; // Show results
+                chartCompareMessage.style.display = 'none'; // Hide message
+            } catch (error) {
+                console.error('Error during comparison calculation:', error);
+                displayCompareError('An error occurred during comparison. Please try again.');
+            } finally {
+                document.getElementById('loadingIndicator').style.display = 'none';
+            }
+        });
+
+        function displayCompareError(message) {
+            compareErrorDiv.textContent = message;
+            compareErrorDiv.style.display = message ? 'block' : 'none';
+        }
+
+        function renderComparisonTable(data) {
+            const tbody = comparisonTable.querySelector('tbody');
+            const theadRow = comparisonTable.querySelector('thead tr');
+
+            // Clear previous table content
+            tbody.innerHTML = '';
+            // Clear previous header columns (except the first 'Metric' column)
+            while (theadRow.children.length > 1) {
+                theadRow.removeChild(theadRow.lastChild);
+            }
+
+            // Add symbol headers to thead
+            data.forEach(item => {
+                const th = document.createElement('th');
+                th.textContent = item.symbol;
+                theadRow.appendChild(th);
+            });
+
+            // Define rows based on metrics
+            const metrics = [
+                { label: 'Starting Investment', key: 'start_investment', format: (val) => `$${formatNumber(val)}` },
+                { label: 'Annual Yield (Est.)', key: 'annual_yield', format: (val) => val }, // Already formatted as % from backend
+                { label: `${compareYearsInput.value}-Year Value (No DRIP)`, key: 'end_value_no_drip', format: (val) => `$${formatNumber(val)}` },
+                { label: `${compareYearsInput.value}-Year Value (With DRIP)`, key: 'end_value_with_drip', format: (val) => `$${formatNumber(val)}` }
+            ];
+
+            metrics.forEach(metric => {
+                const tr = document.createElement('tr');
+                const th = document.createElement('th');
+                th.textContent = metric.label;
+                tr.appendChild(th);
+
+                data.forEach(item => {
+                    const td = document.createElement('td');
+                    td.textContent = metric.format(item[metric.key]);
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderComparisonChart(data, years) {
+            const ctx = comparisonChartCanvas.getContext('2d');
+
+            if (comparisonChartInstance) {
+                comparisonChartInstance.destroy();
+            }
+
+            const datasets = data.map((stockData, index) => {
+                const commonLabels = data[0] ? data[0].labels : []; // Use labels from the first dataset
+
+                return {
+                    label: stockData.symbol,
+                    data: stockData.prices,
+                    borderColor: COLORS[index % COLORS.length],
+                    backgroundColor: COLORS[index % COLORS.length].replace('rgb', 'rgba').replace(')', ', 0.2)'),
+                    borderWidth: 2,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    fill: false
+                };
+            });
+
+            const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-color').trim();
+            const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--chart-grid-color').trim();
+
+            comparisonChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data[0] ? data[0].labels : [],
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                color: textColor
+                            }
+                        },
+                        title: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += `$${context.parsed.y.toFixed(2)}`;
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date',
+                                color: textColor
+                            },
+                            grid: {
+                                color: gridColor,
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: textColor,
+                                autoSkip: true,
+                                maxRotation: 0,
+                                minRotation: 0,
+                                callback: function(value, index, values) {
+                                    const date = new Date(this.getLabelForValue(value));
+                                    if (years > 2) {
+                                        return date.getFullYear();
+                                    } else {
+                                        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                    }
+                                }
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Investment Value ($)',
+                                color: textColor
+                            },
+                            grid: {
+                                color: gridColor,
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: textColor,
+                                callback: function(value) {
+                                    return '$' + value.toFixed(2);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // --- Real-time Clock Logic ---
+        function updateDashboardTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true });
+            currentDashboardTimeSpan.textContent = timeString;
+        }
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            updateDashboardTime(); // Set initial time immediately
+            setInterval(updateDashboardTime, 1000); // Update every second
+        });
+    </script>
+    <script>
+  const toggle = document.getElementById('toggleTheme');
+
+  // Check saved preference
+  if (localStorage.getItem('theme') === 'dark') {
+    document.body.classList.add('dark-theme');
+    toggle.checked = true;
+  }
+
+  toggle.addEventListener('change', () => {
+    document.body.classList.toggle('dark-theme');
+    const mode = document.body.classList.contains('dark-theme') ? 'dark' : 'light';
+    localStorage.setItem('theme', mode); // save user preference
+  });
+</script>
+
+</body>
+</html>
